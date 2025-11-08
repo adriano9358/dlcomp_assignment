@@ -1,0 +1,32 @@
+# Compiled OCaml files
+*.cm[aiox]
+*.cmxa
+*.cmxs
+*.cmt
+*.cmi
+*.annot
+
+# Executables
+*.exe
+*.byte
+*.native
+*.bc
+*.run
+
+# Editor / OS files
+*~
+\#*#
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Opam local switch
+_opam/
+
+# Dune files
+*.install
+_build/
+
+# Mac files
+.DS_Store
