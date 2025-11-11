@@ -95,6 +95,12 @@ let rec eval e env =
       (match eval e1 env with
        | BoolV b -> BoolV (not b)
        | _ -> failwith "Runtime typing error: not requires boolean")
+  | If (cond, then_branch, else_branch) ->
+      begin match eval cond env with
+      | BoolV true -> eval then_branch env
+      | BoolV false -> eval else_branch env
+      | _ -> failwith "Runtime typing error: if condition must be boolean"
+      end
   | Id x -> let a = lookup env x in
             begin match a with
             | Some v -> v

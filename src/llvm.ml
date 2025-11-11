@@ -22,6 +22,9 @@ type llvm =
   | BrI1 of result * label * label
   | BrLabel of label
   | PhiI1 of register * (result * label) list
+  | PhiI32 of register * (result * label) list
+  | ZextI1ToI32 of register * result
+  | CallPrintfI32 of register * result
 
 let count = ref 0
 let new_reg () = incr count; !count
@@ -145,6 +148,48 @@ let rec compile_llvm e env label block =
            (Register ret, l1, b1 @ [CmpEq (type_of e1, ret, r1, Const 0)], bs1)
       )
 
+  | If (t_if, econd, ethen, eelse) ->
+    (* condição em i1 *)
+    let rcond, l0, b0, bs0 = compile_llvm econd env label block in
+    let l_then  = new_label () in
+    let l_else  = new_label () in
+    let l_merge = new_label () in
+
+    (* ramos *)
+    let r_then, l_tend, b_t, bs_t = compile_llvm ethen env l_then [] in
+    let r_else, l_eend, b_e, bs_e = compile_llvm eelse env l_else [] in
+
+    (* blocos *)
+    let blocks =
+      bs0 @ [ (l0, b0 @ [BrI1 (rcond, l_then, l_else)]) ] @
+      bs_t @ [ (l_tend, b_t @ [BrLabel l_merge]) ] @
+      bs_e @ [ (l_eend, b_e @ [BrLabel l_merge]) ]
+    in
+
+    begin match t_if with
+    | UnitT ->
+        (* nenhum valor a juntar, devolve dummy *)
+        (Const 0, l_merge, [], blocks)
+    | BoolT ->
+        let r = new_reg () in
+        (Register r, l_merge, [PhiI1  (r, [ (r_then, l_tend); (r_else, l_eend) ])], blocks)
+    | IntT  ->
+        let r = new_reg () in
+        (Register r, l_merge, [PhiI32 (r, [ (r_then, l_tend); (r_else, l_eend) ])], blocks)
+    | _ -> failwith "If returning unsupported type"
+    end
+
+  | PrintInt (_, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let rcall = new_reg () in
+    (Const 0, l1, b1 @ [CallPrintfI32 (rcall, v)], bs1)
+
+  | PrintBool (_, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let rz = new_reg () in
+    let rcall = new_reg () in
+    (Const 0, l1, b1 @ [ZextI1ToI32 (rz, v); CallPrintfI32 (rcall, Register rz)], bs1)
+
   | Id (_,x) -> 
       begin match Env.lookup env x with 
       | None -> failwith ("Unbound identifier: "^x) 
@@ -226,8 +271,8 @@ let epilogue =
    "declare i32 @printf(i8* noundef, ...) #1"]
 
 let unparse_register n = "%" ^ string_of_int n
-let unparse_label_use n = "%" ^ string_of_int n
-let unparse_label_declaration l = (string_of_int l) ^ ":"
+let unparse_label_use n = "%L" ^ string_of_int n
+let unparse_label_declaration l = "L" ^ string_of_int l ^ ":"
 
 let unparse_result = function
   | Const x -> string_of_int x
@@ -256,6 +301,14 @@ let unparse_llvm_i = function
   | PhiI1 (r, l) ->
       "  " ^ unparse_register r ^ " = phi i1 " ^
       String.concat ", " (List.map (fun (r, l) -> "[" ^ unparse_result r ^ ", " ^ unparse_label_use l ^ "]") l)
+  | PhiI32 (r, l) ->
+      "  " ^ unparse_register r ^ " = phi i32 " ^
+      String.concat ", " (List.map (fun (r, l) -> "[" ^ unparse_result r ^ ", " ^ unparse_label_use l ^ "]") l)
+  | ZextI1ToI32 (r, v) ->
+      "  " ^ unparse_register r ^ " = zext i1 " ^ unparse_result v ^ " to i32"
+  | CallPrintfI32 (r, v) ->
+      "  " ^ unparse_register r ^ " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+      unparse_result v ^ ")"
   | CmpEq (IntT, r, l1, l2) ->
       "  " ^ unparse_register r ^ " = icmp eq i32 " ^ unparse_result l1 ^ ", " ^ unparse_result l2
   | CmpEq (BoolT, r, l1, l2) ->
@@ -298,14 +351,30 @@ let print_block (label, instructions) =
 let print_blocks bs = List.iter print_block bs
 
 let emit_printf ret t =
-  let llvm_type = unparse_type t in
-  "  " ^ unparse_register (new_reg ()) ^ " = call i32 (i8*, ...) @printf(i8* noundef @.str, " ^
-  llvm_type ^ " noundef " ^ unparse_result ret ^ ")"
+  match t with
+  | IntT ->
+      "  " ^ unparse_register (new_reg ()) ^
+      " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+      unparse_result ret ^ ")"
+  | BoolT ->
+      let z = new_reg () in
+      let zline =
+        "  " ^ unparse_register z ^ " = zext i1 " ^ unparse_result ret ^ " to i32"
+      in
+      let call =
+        "  " ^ unparse_register (new_reg ()) ^
+        " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+        unparse_register z ^ ")"
+      in
+      zline ^ "\n" ^ call
+  | UnitT -> ""  (* nada a imprimir *)
+  | _ -> failwith "Unsupported top-level result type for printf"
 
 let print_llvm (ret, label, instructions, blocks) t =
   List.iter print_endline prologue;
   print_blocks (blocks @ [(label, instructions)]);
-  print_endline (emit_printf ret t);
+  let trailer = emit_printf ret t in
+  if trailer <> "" then print_endline trailer;
   List.iter print_endline epilogue
 
 let compile e = compile_llvm e [] 0 []
