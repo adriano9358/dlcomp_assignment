@@ -132,6 +132,31 @@ let rec eval e env =
       in
       eval body env_after_bindings
 
+  | Seq (e1, e2) ->
+      let _ = eval e1 env in
+      eval e2 env
+
+  | New e1 ->
+      let v = eval e1 env in
+      RefV (ref v)
+
+  | Deref e1 ->
+      (match eval e1 env with
+       | RefV r -> !r
+       | _ -> failwith "Runtime error: deref expects a reference")
+
+  | Assign (e1, e2) ->
+      let v1 = eval e1 env in
+      let v2 = eval e2 env in
+      (match v1 with
+       | RefV r -> r := v2; UnitV
+       | _ -> failwith "Runtime error: assign expects a reference")
+
+  | Free e1 ->
+      (match eval e1 env with
+       | RefV _ -> UnitV   (* optional: you could mark as "freed" if you want *)
+       | _ -> failwith "Runtime error: free expects a reference")
+
   | _ -> assert false 
 
 

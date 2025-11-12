@@ -6,6 +6,9 @@ type label = int
 type result =
   | Const of int
   | Register of register
+  | Ptr of register
+
+type mem_kind = IntK | BoolK | RefK
 
 type llvm =
   | Addi32 of register * result * result
@@ -25,6 +28,12 @@ type llvm =
   | PhiI32 of register * (result * label) list
   | ZextI1ToI32 of register * result
   | CallPrintfI32 of register * result
+  | LoadI32 of register * result
+  | StoreI32 of result * result
+  | CallNew of mem_kind * register * result
+  | CallLoad of mem_kind * register * result
+  | CallStore of mem_kind * result * result
+  | CallFree of result
 
 let count = ref 0
 let new_reg () = incr count; !count
@@ -146,20 +155,21 @@ let rec compile_llvm e env label block =
            (* Use CmpEq with BoolT (i1). If the operand was i32 (IntT) then
               Typing.type_of of e1 should reflect that; here we use type_of e1. *)
            (Register ret, l1, b1 @ [CmpEq (type_of e1, ret, r1, Const 0)], bs1)
+       | _ -> failwith "Unexpected result type in Not"
       )
 
   | If (t_if, econd, ethen, eelse) ->
-    (* condição em i1 *)
+    (* condition in i1 *)
     let rcond, l0, b0, bs0 = compile_llvm econd env label block in
     let l_then  = new_label () in
     let l_else  = new_label () in
     let l_merge = new_label () in
 
-    (* ramos *)
+    (* branches *)
     let r_then, l_tend, b_t, bs_t = compile_llvm ethen env l_then [] in
     let r_else, l_eend, b_e, bs_e = compile_llvm eelse env l_else [] in
 
-    (* blocos *)
+    (* blocks *)
     let blocks =
       bs0 @ [ (l0, b0 @ [BrI1 (rcond, l_then, l_else)]) ] @
       bs_t @ [ (l_tend, b_t @ [BrLabel l_merge]) ] @
@@ -253,8 +263,66 @@ let rec compile_llvm e env label block =
     (* Return the body’s result and combined blocks *)
     (r_body, l_body, b_body, bs_after @ bs_body)
 
+  | New (t, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r = new_reg () in
+    begin match t with
+    | RefT IntT -> (Ptr r,  l1, b1 @ [CallNew (IntK,  r, v)], bs1)
+    | RefT BoolT -> (Ptr r,  l1, b1 @ [CallNew (BoolK, r, v)], bs1)
+    | RefT (RefT _) -> (Ptr r,  l1, b1 @ [CallNew (RefK,  r, v)], bs1)
+    | RefT _ | _ -> failwith "New: unsupported element type"
+    end
 
-  | _ -> failwith "internal: unexpected llvm node in typing AST"
+  | Deref (t, e1) ->
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r = new_reg () in
+    begin match t with
+    | IntT -> (Register r, l1, b1 @ [CallLoad (IntK,  r, p)], bs1)
+    | BoolT -> (Register r, l1, b1 @ [CallLoad (BoolK, r, p)], bs1)
+    | RefT _ -> (Ptr r, l1, b1 @ [CallLoad (RefK,  r, p)], bs1)
+    | _ -> failwith "Deref: unsupported element type"
+    end
+
+  | Assign (_, e1, e2) ->
+    (* p é ptr da célula; v é o valor a escrever *)
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    let v, l2, b2, bs2 = compile_llvm e2 env l1 b1 in
+    (* descobrir o conteúdo da ref do lado esquerdo *)
+    let lhs_t = Typing.type_of e1 in
+    let instr =
+      match lhs_t with
+      | RefT IntT -> CallStore (IntK, p, v)
+      | RefT BoolT -> CallStore (BoolK, p, v)
+      | RefT (RefT _) -> CallStore (RefK, p, v)
+      | _ -> failwith "Assign: lhs must be ref(_)"
+    in
+    (Const 0, l2, b2 @ [instr], bs1 @ bs2)
+
+  | Free (_, e1) ->
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    (Const 0, l1, b1 @ [CallFree p], bs1)
+
+  | Seq (_, e1, e2) ->
+    let _, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r2, l2, b2, bs2 = compile_llvm e2 env l1 b1 in
+    (r2, l2, b2, bs1 @ bs2)
+
+  | While (_, econd, ebody) ->
+    let l_cond = new_label () in
+    let l_body = new_label () in
+    let l_exit = new_label () in
+    (* jump to condition *)
+    let blocks0 = [ (label, block @ [BrLabel l_cond]) ] in
+    (* condition *)
+    let rc, lc, bc, bsc = compile_llvm econd env l_cond [] in
+    let blk_cond = (lc, bc @ [BrI1 (rc, l_body, l_exit)]) in
+    (* body *)
+    let _, lb, bb, bsb = compile_llvm ebody env l_body [] in
+    let blk_body_end = (lb, bb @ [BrLabel l_cond]) in
+    (Const 0, l_exit, [], blocks0 @ bsc @ [blk_cond] @ bsb @ [blk_body_end])
+
+
+  | _ -> failwith "Unexpected llvm node in typing AST"
 
 
 
@@ -268,20 +336,35 @@ let prologue =
 let epilogue =
   ["  ret i32 0";
    "}";
-   "declare i32 @printf(i8* noundef, ...) #1"]
+   "declare i32 @printf(i8* noundef, ...) #1";
+   "declare ptr  @new_ref_int(i32 noundef)";
+   "declare ptr  @new_ref_bool(i1 noundef)";
+   "declare ptr  @new_ref_ref(ptr noundef)";
+   "declare i32  @deref_int(ptr noundef)";
+   "declare i1   @deref_bool(ptr noundef)";
+   "declare ptr  @deref_ref(ptr noundef)";
+   "declare void @assign_int(ptr noundef, i32 noundef)";
+   "declare void @assign_bool(ptr noundef, i1 noundef)";
+   "declare void @assign_ref(ptr noundef, ptr noundef)";
+   "declare void @free_ref(ptr noundef)"]
 
 let unparse_register n = "%" ^ string_of_int n
 let unparse_label_use n = "%L" ^ string_of_int n
 let unparse_label_declaration l = "L" ^ string_of_int l ^ ":"
 
+let unparse_ptr = function
+  | Ptr r -> unparse_register r
+  | _ -> failwith "Expected pointer"
+
 let unparse_result = function
   | Const x -> string_of_int x
   | Register x -> unparse_register x
+  | _ -> failwith "Unparse: unknown result type"
 
 let unparse_type = function
   | IntT -> "i32"
   | BoolT -> "i1"
-  | _ -> failwith "Unknown type"
+  | _ -> failwith "Unparse: unknown type"
 
 let unparse_llvm_i = function
   | Addi32 (r, l1, l2) ->
@@ -340,6 +423,37 @@ let unparse_llvm_i = function
   | CmpGt (t, _, _, _)
   | CmpGe (t, _, _, _) ->
       failwith ("Internal error: Cannot compare type " ^ (unparse_type t))
+
+  | LoadI32 (r, p) ->
+      "  " ^ unparse_register r ^ " = load i32, i32* " ^ unparse_ptr p
+  | StoreI32 (p, v) ->
+      "  store i32 " ^ unparse_result v ^ ", i32* " ^ unparse_ptr p
+  | CallNew (k, r, v) ->
+      let f_name, arg =
+        match k with
+        | IntK  -> ("@new_ref_int",  "i32 " ^ unparse_result v)
+        | BoolK -> ("@new_ref_bool", "i1 "  ^ unparse_result v)
+        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_ptr v)
+      in
+      "  " ^ unparse_register r ^ " = call ptr " ^ f_name ^ "(" ^ arg ^ ")"
+  | CallLoad (k, r, p) ->
+      let f_name, ret_ty =
+        match k with
+        | IntK  -> ("@deref_int",  "i32")
+        | BoolK -> ("@deref_bool", "i1")
+        | RefK  -> ("@deref_ref",  "ptr")
+      in
+      "  " ^ unparse_register r ^ " = call " ^ ret_ty ^ " " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ")"
+  | CallStore (k, p, v) ->
+      let f_name, v_arg =
+        match k with
+        | IntK  -> ("@assign_int",  "i32 " ^ unparse_result v)
+        | BoolK -> ("@assign_bool", "i1 "  ^ unparse_result v)
+        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_ptr v)
+      in
+      "  call void " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ", " ^ v_arg ^ ")"
+  | CallFree p ->
+      "  call void @free_ref(ptr noundef " ^ unparse_ptr p ^ ")"
 
   
   (* | _ -> failwith "Not implemented yet" *)
