@@ -61,9 +61,9 @@ term:
 factor: 
   | NEW LPAREN expr RPAREN          { New($3) }
   | FREE LPAREN expr RPAREN         { Free($3) }
-  | BANG expr                       { Deref($2) }
   | PRINTINT LPAREN expr RPAREN    { PrintInt($3) }
   | PRINTBOOL LPAREN expr RPAREN   { PrintBool($3) }
+  | BANG factor                     { Deref($2) }
 
   | TRUE                  { Bool true }
   | FALSE                 { Bool false }

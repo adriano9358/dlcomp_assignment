@@ -6,6 +6,9 @@ type label = int
 type result =
   | Const of int
   | Register of register
+  | Ptr of register
+
+type mem_kind = IntK | BoolK | RefK
 
 type llvm =
   | Addi32 of register * result * result
@@ -22,6 +25,15 @@ type llvm =
   | BrI1 of result * label * label
   | BrLabel of label
   | PhiI1 of register * (result * label) list
+  | PhiI32 of register * (result * label) list
+  | ZextI1ToI32 of register * result
+  | CallPrintfI32 of register * result
+  | LoadI32 of register * result
+  | StoreI32 of result * result
+  | CallNew of mem_kind * register * result
+  | CallLoad of mem_kind * register * result
+  | CallStore of mem_kind * result * result
+  | CallFree of result
 
 let count = ref 0
 let new_reg () = incr count; !count
@@ -143,7 +155,50 @@ let rec compile_llvm e env label block =
            (* Use CmpEq with BoolT (i1). If the operand was i32 (IntT) then
               Typing.type_of of e1 should reflect that; here we use type_of e1. *)
            (Register ret, l1, b1 @ [CmpEq (type_of e1, ret, r1, Const 0)], bs1)
+       | _ -> failwith "Unexpected result type in Not"
       )
+
+  | If (t_if, econd, ethen, eelse) ->
+    (* condition in i1 *)
+    let rcond, l0, b0, bs0 = compile_llvm econd env label block in
+    let l_then  = new_label () in
+    let l_else  = new_label () in
+    let l_merge = new_label () in
+
+    (* branches *)
+    let r_then, l_tend, b_t, bs_t = compile_llvm ethen env l_then [] in
+    let r_else, l_eend, b_e, bs_e = compile_llvm eelse env l_else [] in
+
+    (* blocks *)
+    let blocks =
+      bs0 @ [ (l0, b0 @ [BrI1 (rcond, l_then, l_else)]) ] @
+      bs_t @ [ (l_tend, b_t @ [BrLabel l_merge]) ] @
+      bs_e @ [ (l_eend, b_e @ [BrLabel l_merge]) ]
+    in
+
+    begin match t_if with
+    | UnitT ->
+        (* nenhum valor a juntar, devolve dummy *)
+        (Const 0, l_merge, [], blocks)
+    | BoolT ->
+        let r = new_reg () in
+        (Register r, l_merge, [PhiI1  (r, [ (r_then, l_tend); (r_else, l_eend) ])], blocks)
+    | IntT  ->
+        let r = new_reg () in
+        (Register r, l_merge, [PhiI32 (r, [ (r_then, l_tend); (r_else, l_eend) ])], blocks)
+    | _ -> failwith "If returning unsupported type"
+    end
+
+  | PrintInt (_, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let rcall = new_reg () in
+    (Const 0, l1, b1 @ [CallPrintfI32 (rcall, v)], bs1)
+
+  | PrintBool (_, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let rz = new_reg () in
+    let rcall = new_reg () in
+    (Const 0, l1, b1 @ [ZextI1ToI32 (rz, v); CallPrintfI32 (rcall, Register rz)], bs1)
 
   | Id (_,x) -> 
       begin match Env.lookup env x with 
@@ -208,8 +263,66 @@ let rec compile_llvm e env label block =
     (* Return the body’s result and combined blocks *)
     (r_body, l_body, b_body, bs_after @ bs_body)
 
+  | New (t, e1) ->
+    let v, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r = new_reg () in
+    begin match t with
+    | RefT IntT -> (Ptr r,  l1, b1 @ [CallNew (IntK,  r, v)], bs1)
+    | RefT BoolT -> (Ptr r,  l1, b1 @ [CallNew (BoolK, r, v)], bs1)
+    | RefT (RefT _) -> (Ptr r,  l1, b1 @ [CallNew (RefK,  r, v)], bs1)
+    | RefT _ | _ -> failwith "New: unsupported element type"
+    end
 
-  | _ -> failwith "internal: unexpected llvm node in typing AST"
+  | Deref (t, e1) ->
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r = new_reg () in
+    begin match t with
+    | IntT -> (Register r, l1, b1 @ [CallLoad (IntK,  r, p)], bs1)
+    | BoolT -> (Register r, l1, b1 @ [CallLoad (BoolK, r, p)], bs1)
+    | RefT _ -> (Ptr r, l1, b1 @ [CallLoad (RefK,  r, p)], bs1)
+    | _ -> failwith "Deref: unsupported element type"
+    end
+
+  | Assign (_, e1, e2) ->
+    (* p é ptr da célula; v é o valor a escrever *)
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    let v, l2, b2, bs2 = compile_llvm e2 env l1 b1 in
+    (* descobrir o conteúdo da ref do lado esquerdo *)
+    let lhs_t = Typing.type_of e1 in
+    let instr =
+      match lhs_t with
+      | RefT IntT -> CallStore (IntK, p, v)
+      | RefT BoolT -> CallStore (BoolK, p, v)
+      | RefT (RefT _) -> CallStore (RefK, p, v)
+      | _ -> failwith "Assign: lhs must be ref(_)"
+    in
+    (Const 0, l2, b2 @ [instr], bs1 @ bs2)
+
+  | Free (_, e1) ->
+    let p, l1, b1, bs1 = compile_llvm e1 env label block in
+    (Const 0, l1, b1 @ [CallFree p], bs1)
+
+  | Seq (_, e1, e2) ->
+    let _, l1, b1, bs1 = compile_llvm e1 env label block in
+    let r2, l2, b2, bs2 = compile_llvm e2 env l1 b1 in
+    (r2, l2, b2, bs1 @ bs2)
+
+  | While (_, econd, ebody) ->
+    let l_cond = new_label () in
+    let l_body = new_label () in
+    let l_exit = new_label () in
+    (* jump to condition *)
+    let blocks0 = [ (label, block @ [BrLabel l_cond]) ] in
+    (* condition *)
+    let rc, lc, bc, bsc = compile_llvm econd env l_cond [] in
+    let blk_cond = (lc, bc @ [BrI1 (rc, l_body, l_exit)]) in
+    (* body *)
+    let _, lb, bb, bsb = compile_llvm ebody env l_body [] in
+    let blk_body_end = (lb, bb @ [BrLabel l_cond]) in
+    (Const 0, l_exit, [], blocks0 @ bsc @ [blk_cond] @ bsb @ [blk_body_end])
+
+
+  | _ -> failwith "Unexpected llvm node in typing AST"
 
 
 
@@ -223,20 +336,35 @@ let prologue =
 let epilogue =
   ["  ret i32 0";
    "}";
-   "declare i32 @printf(i8* noundef, ...) #1"]
+   "declare i32 @printf(i8* noundef, ...) #1";
+   "declare ptr  @new_ref_int(i32 noundef)";
+   "declare ptr  @new_ref_bool(i1 noundef)";
+   "declare ptr  @new_ref_ref(ptr noundef)";
+   "declare i32  @deref_int(ptr noundef)";
+   "declare i1   @deref_bool(ptr noundef)";
+   "declare ptr  @deref_ref(ptr noundef)";
+   "declare void @assign_int(ptr noundef, i32 noundef)";
+   "declare void @assign_bool(ptr noundef, i1 noundef)";
+   "declare void @assign_ref(ptr noundef, ptr noundef)";
+   "declare void @free_ref(ptr noundef)"]
 
 let unparse_register n = "%" ^ string_of_int n
-let unparse_label_use n = "%" ^ string_of_int n
-let unparse_label_declaration l = (string_of_int l) ^ ":"
+let unparse_label_use n = "%L" ^ string_of_int n
+let unparse_label_declaration l = "L" ^ string_of_int l ^ ":"
+
+let unparse_ptr = function
+  | Ptr r -> unparse_register r
+  | _ -> failwith "Expected pointer"
 
 let unparse_result = function
   | Const x -> string_of_int x
   | Register x -> unparse_register x
+  | _ -> failwith "Unparse: unknown result type"
 
 let unparse_type = function
   | IntT -> "i32"
   | BoolT -> "i1"
-  | _ -> failwith "Unknown type"
+  | _ -> failwith "Unparse: unknown type"
 
 let unparse_llvm_i = function
   | Addi32 (r, l1, l2) ->
@@ -256,6 +384,14 @@ let unparse_llvm_i = function
   | PhiI1 (r, l) ->
       "  " ^ unparse_register r ^ " = phi i1 " ^
       String.concat ", " (List.map (fun (r, l) -> "[" ^ unparse_result r ^ ", " ^ unparse_label_use l ^ "]") l)
+  | PhiI32 (r, l) ->
+      "  " ^ unparse_register r ^ " = phi i32 " ^
+      String.concat ", " (List.map (fun (r, l) -> "[" ^ unparse_result r ^ ", " ^ unparse_label_use l ^ "]") l)
+  | ZextI1ToI32 (r, v) ->
+      "  " ^ unparse_register r ^ " = zext i1 " ^ unparse_result v ^ " to i32"
+  | CallPrintfI32 (r, v) ->
+      "  " ^ unparse_register r ^ " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+      unparse_result v ^ ")"
   | CmpEq (IntT, r, l1, l2) ->
       "  " ^ unparse_register r ^ " = icmp eq i32 " ^ unparse_result l1 ^ ", " ^ unparse_result l2
   | CmpEq (BoolT, r, l1, l2) ->
@@ -288,6 +424,37 @@ let unparse_llvm_i = function
   | CmpGe (t, _, _, _) ->
       failwith ("Internal error: Cannot compare type " ^ (unparse_type t))
 
+  | LoadI32 (r, p) ->
+      "  " ^ unparse_register r ^ " = load i32, i32* " ^ unparse_ptr p
+  | StoreI32 (p, v) ->
+      "  store i32 " ^ unparse_result v ^ ", i32* " ^ unparse_ptr p
+  | CallNew (k, r, v) ->
+      let f_name, arg =
+        match k with
+        | IntK  -> ("@new_ref_int",  "i32 " ^ unparse_result v)
+        | BoolK -> ("@new_ref_bool", "i1 "  ^ unparse_result v)
+        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_ptr v)
+      in
+      "  " ^ unparse_register r ^ " = call ptr " ^ f_name ^ "(" ^ arg ^ ")"
+  | CallLoad (k, r, p) ->
+      let f_name, ret_ty =
+        match k with
+        | IntK  -> ("@deref_int",  "i32")
+        | BoolK -> ("@deref_bool", "i1")
+        | RefK  -> ("@deref_ref",  "ptr")
+      in
+      "  " ^ unparse_register r ^ " = call " ^ ret_ty ^ " " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ")"
+  | CallStore (k, p, v) ->
+      let f_name, v_arg =
+        match k with
+        | IntK  -> ("@assign_int",  "i32 " ^ unparse_result v)
+        | BoolK -> ("@assign_bool", "i1 "  ^ unparse_result v)
+        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_ptr v)
+      in
+      "  call void " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ", " ^ v_arg ^ ")"
+  | CallFree p ->
+      "  call void @free_ref(ptr noundef " ^ unparse_ptr p ^ ")"
+
   
   (* | _ -> failwith "Not implemented yet" *)
 
@@ -298,14 +465,30 @@ let print_block (label, instructions) =
 let print_blocks bs = List.iter print_block bs
 
 let emit_printf ret t =
-  let llvm_type = unparse_type t in
-  "  " ^ unparse_register (new_reg ()) ^ " = call i32 (i8*, ...) @printf(i8* noundef @.str, " ^
-  llvm_type ^ " noundef " ^ unparse_result ret ^ ")"
+  match t with
+  | IntT ->
+      "  " ^ unparse_register (new_reg ()) ^
+      " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+      unparse_result ret ^ ")"
+  | BoolT ->
+      let z = new_reg () in
+      let zline =
+        "  " ^ unparse_register z ^ " = zext i1 " ^ unparse_result ret ^ " to i32"
+      in
+      let call =
+        "  " ^ unparse_register (new_reg ()) ^
+        " = call i32 (i8*, ...) @printf(i8* noundef @.str, i32 noundef " ^
+        unparse_register z ^ ")"
+      in
+      zline ^ "\n" ^ call
+  | UnitT -> ""  (* nada a imprimir *)
+  | _ -> failwith "Unsupported top-level result type for printf"
 
 let print_llvm (ret, label, instructions, blocks) t =
   List.iter print_endline prologue;
   print_blocks (blocks @ [(label, instructions)]);
-  print_endline (emit_printf ret t);
+  let trailer = emit_printf ret t in
+  if trailer <> "" then print_endline trailer;
   List.iter print_endline epilogue
 
 let compile e = compile_llvm e [] 0 []

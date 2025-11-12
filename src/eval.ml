@@ -95,6 +95,12 @@ let rec eval e env =
       (match eval e1 env with
        | BoolV b -> BoolV (not b)
        | _ -> failwith "Runtime typing error: not requires boolean")
+  | If (cond, then_branch, else_branch) ->
+      begin match eval cond env with
+      | BoolV true -> eval then_branch env
+      | BoolV false -> eval else_branch env
+      | _ -> failwith "Runtime typing error: if condition must be boolean"
+      end
   | Id x -> let a = lookup env x in
             begin match a with
             | Some v -> v
@@ -125,6 +131,31 @@ let rec eval e env =
           bindings
       in
       eval body env_after_bindings
+
+  | Seq (e1, e2) ->
+      let _ = eval e1 env in
+      eval e2 env
+
+  | New e1 ->
+      let v = eval e1 env in
+      RefV (ref v)
+
+  | Deref e1 ->
+      (match eval e1 env with
+       | RefV r -> !r
+       | _ -> failwith "Runtime error: deref expects a reference")
+
+  | Assign (e1, e2) ->
+      let v1 = eval e1 env in
+      let v2 = eval e2 env in
+      (match v1 with
+       | RefV r -> r := v2; UnitV
+       | _ -> failwith "Runtime error: assign expects a reference")
+
+  | Free e1 ->
+      (match eval e1 env with
+       | RefV _ -> UnitV   (* optional: you could mark as "freed" if you want *)
+       | _ -> failwith "Runtime error: free expects a reference")
 
   | _ -> assert false 
 
