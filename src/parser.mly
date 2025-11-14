@@ -4,7 +4,7 @@ open Ast
 
 %token <int> INT
 %token <string> ID
-%token PLUS MINUS TIMES DIV LPAREN RPAREN AND OR NOT EQ NEQ LT LE GT GE TRUE FALSE EOF LET IN IF THEN ELSE WHILE DO NEW FREE PRINTINT PRINTBOOL BANG ASSIGN SEMI
+%token PLUS MINUS TIMES DIV LPAREN RPAREN AND OR NOT EQ NEQ LT LE GT GE TRUE FALSE EOF LET IN IF THEN ELSE WHILE DO NEW FREE PRINTINT PRINTBOOL BANG ASSIGN SEMI FUN ARROW
 
 %start main
 %type <Ast.ast> main
@@ -18,8 +18,8 @@ expr:
   | IF expr THEN expr ELSE expr { If($2, $4, $6) }
   | WHILE expr DO expr      { While($2, $4) }
   | assign_expr             { $1 }
-
   | LET bindings IN expr     { Let($2, $4) }
+  | FUN ID ARROW expr        { Fun($2, $4) }
   
 
 
@@ -59,6 +59,8 @@ term:
   | factor                 {$1}
 
 factor: 
+  | factor LPAREN expr RPAREN { App($1, $3) }
+
   | NEW LPAREN expr RPAREN          { New($3) }
   | FREE LPAREN expr RPAREN         { Free($3) }
   | PRINTINT LPAREN expr RPAREN    { PrintInt($3) }

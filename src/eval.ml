@@ -9,12 +9,14 @@ type result =
   | BoolV of bool
   | RefV of result ref
   | UnitV
+  | ClosureV of string * Ast.ast * result Env.env
 
 let unparse_result = function
   | IntV n -> string_of_int n
   | BoolV b -> string_of_bool b
   | RefV _ -> "<ref>"
   | UnitV -> "unit"
+  | ClosureV _ -> "<closure>"
 
 let int_int_binop f r1 r2 = 
   match r1, r2 with
@@ -106,17 +108,6 @@ let rec eval e env =
             | Some v -> v
             | None -> failwith ("Unbound variable: " ^ x)
             end
-  (* | Let (bindings, body) ->
-      let env' = begin_scope env in
-      let env_after_bindings =
-        List.fold_left
-          (fun acc_env (name, expr) ->
-             let v = eval expr acc_env in
-             bind acc_env name v)
-          env'
-          bindings
-      in
-      eval body env_after_bindings *)
 
   | Let (bindings, body) ->
       let env' = begin_scope env in
@@ -157,18 +148,19 @@ let rec eval e env =
        | RefV _ -> UnitV   (* optional: you could mark as "freed" if you want *)
        | _ -> failwith "Runtime error: free expects a reference")
 
+  | Fun (param, body) ->
+      ClosureV (param, body, env)
+
+  | App (e1, e2) ->
+      let v1 = eval e1 env in
+      let v2 = eval e2 env in
+      (match v1 with
+       | ClosureV (param, body, env0) -> 
+           let env1 = begin_scope env0 in
+           let env1' = bind env1 param v2 in
+           let result = eval body env1' in
+           let _ = end_scope env1 in
+           result
+       | _ -> failwith "Runtime error: application of a non-function")
+
   | _ -> assert false 
-
-
-
-      
-
-
-
-(* | Let (x,e1,e2) ->   
-    let v1 = eval e1 env in
-    let env' = begin_scope env in
-    let env'' = bind env' x v1 in
-    let v2 = eval e2 env'' in
-    let _ = end_scope env in
-    v2  *)

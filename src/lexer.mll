@@ -6,6 +6,8 @@
 rule read = parse
   | [' ' '\t' '\r' '\n']     { read lexbuf }       (* skip whitespace *)
   | ['0'-'9']+ as i          { INT (int_of_string i) }
+  | "fun"                   { FUN }
+  | "->"                    { ARROW }
   | "let"                   { LET }
   | "in"                    { IN }
   | "if"                    { IF }
