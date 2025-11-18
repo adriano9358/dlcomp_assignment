@@ -9,6 +9,7 @@ type calc_type =
   | RefT of calc_type
   | UnitT
   | NoneT of string
+  | FunT of calc_type * calc_type
 
 type ann = calc_type
 
@@ -49,6 +50,9 @@ type ast =
   | PrintBool of ann * ast
   | PrintEndline of ann
 
+  | Fun of ann * string * calc_type * ast 
+  | App of ann * ast * ast
+
 
 let type_of = function
   | Num _ -> IntT
@@ -59,7 +63,16 @@ let type_of = function
   | Id (t,_) | Let (t,_,_)
   | Seq (t,_,_) | Assign (t,_,_) | If (t,_,_,_) | While (t,_,_)
   | New (t,_) | Deref (t,_) | Free (t,_)
-  | PrintInt (t,_) | PrintBool (t,_) | PrintEndline(t) -> t
+  | PrintInt (t,_) | PrintBool (t,_) | PrintEndline(t)  | Fun(t, _, _ ,_ ) | App(t, _, _) -> t
+
+let rec convert_type = function
+  | Ast.IntT -> IntT
+  | Ast.BoolT -> BoolT
+  | Ast.UnitT -> UnitT
+  | Ast.NoneT -> NoneT "Invalid type"
+  | Ast.RefT t -> RefT (convert_type t)
+  | Ast.FunT (t1, t2) -> FunT (convert_type t1, convert_type t2)
+
 
 let rec unparse_type = function
   | IntT -> "int"
@@ -67,6 +80,7 @@ let rec unparse_type = function
   | RefT t -> "ref(" ^ unparse_type t ^ ")"
   | UnitT -> "unit"
   | NoneT m -> "typing error: " ^ m
+  | FunT (t1, t2) -> "(" ^ unparse_type t1 ^ " -> " ^ unparse_type t2 ^ ")"
 
 
 let mk_add t e1 e2 = Add (t, e1, e2)
@@ -99,6 +113,8 @@ let mk_free t e = Free (t, e)
 let mk_printint t e = PrintInt (t, e)
 let mk_printbool t e = PrintBool (t, e)
 let mk_printendline t = PrintEndline (t)
+let mk_fun t name typ body = Fun (t, name, typ, body)
+let mk_app t e1 e2 = App (t, e1, e2)
 
 
 let type_int_int_int_bin_op mk e1 e2 =
@@ -237,5 +253,26 @@ let rec typecheck e env =
   | Ast.PrintEndline ->
       mk_printendline UnitT
 
-  | _ -> failwith "Unimplemented typing case"
+  | Ast.Fun (name, typ, body) ->
+      let env' = begin_scope env in
+      let env'' = bind env' name (convert_type typ) in
+      let t1 = typecheck body env'' in
+      let _ = end_scope env'' in
+      (match type_of t1 with
+     | NoneT _ -> mk_fun (NoneT "Function parameter type mismatch") name (convert_type typ) t1
+     | _ -> mk_fun (FunT (convert_type typ, type_of t1)) name (convert_type typ) t1)
+  
+  | Ast.App (e1, e2) ->
+      let e1' = typecheck e1 env in
+      let e2' = typecheck e2 env in
+      (match type_of e1' with
+        | FunT (param_ty, ret_ty) ->
+           if param_ty = type_of e2' then
+             mk_app ret_ty e1' e2'
+           else
+             mk_app (NoneT "Function parameter type mismatch") e1' e2'
+        | _ -> mk_app (NoneT "Function parameter type mismatch") e1' e2'
+      )
+
+  (* | _ -> failwith "Unimplemented typing case" *)
       

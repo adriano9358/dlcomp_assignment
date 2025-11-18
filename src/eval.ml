@@ -41,7 +41,6 @@ let a_a_bool_neq r1 r2 =
   | _ -> failwith "Runtime typing error"
 
 
-(* Could potentially reduce the following functions to a more generalized version*)
 
 let int_int_bool_lt r1 r2 =
   match r1, r2 with
@@ -114,7 +113,7 @@ let rec eval e env =
       List.fold_left
         (fun acc_env (name, expr) ->
            let v = eval expr acc_env in
-           bind acc_env name v    (* bind the value directly *)
+           bind acc_env name v    
         )
         env'
         bindings
@@ -172,7 +171,7 @@ let rec eval e env =
       let () = print_endline "" in
       UnitV
 
-  | Fun (param, body) ->
+  | Fun (param , _ , body) ->
       ClosureV (param, body, env)
 
   | App (e1, e2) ->
@@ -185,7 +184,7 @@ let rec eval e env =
            let result = eval body env1' in
            let _ = end_scope env1 in
            result
-  |      _ -> failwith "Runtime error: application of a non-function")
+        | _ -> failwith "Runtime error: application of a non-function")
 
 
   (* | _ -> assert false  *)
