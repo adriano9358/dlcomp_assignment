@@ -36,6 +36,7 @@ type ast =
 
   | PrintInt of ast
   | PrintBool of ast
+  | PrintEndline
 
 let paren = fun p q s -> if p > q then "("^s^")" else s
 
@@ -76,6 +77,7 @@ let rec unparse_ast p e =
 
   | PrintInt e1 -> paren p 0 ("printInt(" ^ unparse_ast 0 e1 ^ ")")
   | PrintBool e1 -> paren p 0 ("printBool(" ^ unparse_ast 0 e1 ^ ")")
+  | PrintEndline -> paren p 0 "printEndline()"
   (* | _ -> assert false *)
 
 

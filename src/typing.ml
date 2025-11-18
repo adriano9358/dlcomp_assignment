@@ -47,6 +47,7 @@ type ast =
 
   | PrintInt of ann * ast
   | PrintBool of ann * ast
+  | PrintEndline of ann
 
 
 let type_of = function
@@ -58,7 +59,7 @@ let type_of = function
   | Id (t,_) | Let (t,_,_)
   | Seq (t,_,_) | Assign (t,_,_) | If (t,_,_,_) | While (t,_,_)
   | New (t,_) | Deref (t,_) | Free (t,_)
-  | PrintInt (t,_) | PrintBool (t,_) -> t
+  | PrintInt (t,_) | PrintBool (t,_) | PrintEndline(t) -> t
 
 let rec unparse_type = function
   | IntT -> "int"
@@ -97,6 +98,7 @@ let mk_deref t e = Deref (t, e)
 let mk_free t e = Free (t, e)
 let mk_printint t e = PrintInt (t, e)
 let mk_printbool t e = PrintBool (t, e)
+let mk_printendline t = PrintEndline (t)
 
 
 let type_int_int_int_bin_op mk e1 e2 =
@@ -231,3 +233,6 @@ let rec typecheck e env =
       (match type_of e1' with
        | BoolT -> mk_printbool UnitT e1'
        | _ -> mk_printbool (NoneT "printBool expects boolean") e1')
+
+  | Ast.PrintEndline ->
+      mk_printendline UnitT

@@ -2,7 +2,7 @@
 
 open Ast
 open Env
-open Mem
+
 
 type result = 
   | IntV of int
@@ -106,31 +106,28 @@ let rec eval e env =
             | Some v -> v
             | None -> failwith ("Unbound variable: " ^ x)
             end
-  (* | Let (bindings, body) ->
-      let env' = begin_scope env in
-      let env_after_bindings =
-        List.fold_left
-          (fun acc_env (name, expr) ->
-             let v = eval expr acc_env in
-             bind acc_env name v)
-          env'
-          bindings
-      in
-      eval body env_after_bindings *)
-
   | Let (bindings, body) ->
-      let env' = begin_scope env in
-      let env_after_bindings =
-        List.fold_left
-          (fun acc_env (name, expr) ->
-             let v = eval expr acc_env in        (* evaluate initializer in current acc_env *)
-             let r = new_ref v in                (* allocate a new memory cell and initialize *)
-             bind acc_env name (RefV r)         (* bind name -> RefV r in current scope *)
-          )
-          env'
-          bindings
+    let env' = begin_scope env in
+    let env_after_bindings =
+      List.fold_left
+        (fun acc_env (name, expr) ->
+           let v = eval expr acc_env in
+           bind acc_env name v    (* bind the value directly *)
+        )
+        env'
+        bindings
+    in
+    eval body env_after_bindings
+
+  | While (cond, body) ->
+      let rec loop () =
+        match eval cond env with
+        | BoolV true -> let _ = eval body env in loop ()
+        | BoolV false -> UnitV
+        | _ -> failwith "Runtime typing error: while condition must be boolean"
       in
-      eval body env_after_bindings
+      loop ()
+
 
   | Seq (e1, e2) ->
       let _ = eval e1 env in
@@ -138,37 +135,41 @@ let rec eval e env =
 
   | New e1 ->
       let v = eval e1 env in
-      RefV (ref v)
+      RefV (Mem.new_ref v)
 
   | Deref e1 ->
       (match eval e1 env with
-       | RefV r -> !r
+       | RefV r -> Mem.deref r
        | _ -> failwith "Runtime error: deref expects a reference")
 
   | Assign (e1, e2) ->
       let v1 = eval e1 env in
       let v2 = eval e2 env in
       (match v1 with
-       | RefV r -> r := v2; UnitV
+       | RefV r -> Mem.assign r v2; UnitV
        | _ -> failwith "Runtime error: assign expects a reference")
 
   | Free e1 ->
       (match eval e1 env with
-       | RefV _ -> UnitV   (* optional: you could mark as "freed" if you want *)
+       | RefV _ ->  UnitV   (* optional: you could mark as "freed" if you want *)
        | _ -> failwith "Runtime error: free expects a reference")
 
-  | _ -> assert false 
+  | PrintInt e1 ->
+      let v = eval e1 env in
+      let n = as_int v in
+      let () = print_endline (string_of_int n) in
+      UnitV
+
+  | PrintBool e1 ->
+      let v = eval e1 env in
+      let b = as_bool v in
+      let () = print_endline (string_of_bool b) in
+      UnitV
+
+  | PrintEndline ->
+      let () = print_endline "" in
+      UnitV
 
 
 
-      
-
-
-
-(* | Let (x,e1,e2) ->   
-    let v1 = eval e1 env in
-    let env' = begin_scope env in
-    let env'' = bind env' x v1 in
-    let v2 = eval e2 env'' in
-    let _ = end_scope env in
-    v2  *)
+  (* | _ -> assert false  *)

@@ -13,10 +13,12 @@ rule read = parse
   | "else"                  { ELSE }
   | "while"                 { WHILE }
   | "do"                    { DO }
+  | "end"                   { END }
   | "new"                   { NEW }
   | "free"                  { FREE }
   | "printInt"              { PRINTINT }
   | "printBool"             { PRINTBOOL }
+  | "printEndline"          { PRINTENDLINE }
   | "true"                  { TRUE }
   | "false"                 { FALSE }
   | "!"                     { BANG }

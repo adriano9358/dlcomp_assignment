@@ -20,7 +20,7 @@ let () =
     | s ->
         (try
            let e = parse_string s in 
-           print_string (Ast.unparse_ast 100 e^" "); flush stdout;
+           (* print_string (Ast.unparse_ast 100 e^" "); flush stdout; *)
            
            let type_env = Env.empty_env in
            let eval_env = Env.empty_env in
@@ -31,11 +31,14 @@ let () =
            (match expr_type with
             | Typing.NoneT msg ->
                 Printf.eprintf "Typing error: %s\n%!" msg
-            | _ ->
+            (* | _ ->
                 let v = Eval.eval e eval_env in
                 Printf.printf " = %s : %s\n%!"
                   (Eval.unparse_result v)
-                  (Typing.unparse_type expr_type))
+                  (Typing.unparse_type expr_type)) *)
+            | _ ->
+                let _ = Eval.eval e eval_env in
+                ())
          with Failure msg ->
            Printf.eprintf "Error: %s\n%!" msg);
         loop ()
