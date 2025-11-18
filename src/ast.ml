@@ -38,6 +38,9 @@ type ast =
   | PrintBool of ast
   | PrintEndline
 
+  | Fun of string * ast              
+  | App of ast * ast
+
 let paren = fun p q s -> if p > q then "("^s^")" else s
 
 (* This function converts an AST back to a string representation of the expression *)
@@ -78,6 +81,9 @@ let rec unparse_ast p e =
   | PrintInt e1 -> paren p 0 ("printInt(" ^ unparse_ast 0 e1 ^ ")")
   | PrintBool e1 -> paren p 0 ("printBool(" ^ unparse_ast 0 e1 ^ ")")
   | PrintEndline -> paren p 0 "printEndline()"
+
+  | Fun (x,e1) -> paren p 40 ("fun " ^ x ^ " -> " ^ unparse_ast 0 e1)
+  | App (e1,e2) -> paren p 35 (unparse_ast 35 e1 ^ " " ^ unparse_ast 36 e2)
   (* | _ -> assert false *)
 
 

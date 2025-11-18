@@ -236,3 +236,6 @@ let rec typecheck e env =
 
   | Ast.PrintEndline ->
       mk_printendline UnitT
+
+  | _ -> failwith "Unimplemented typing case"
+      
