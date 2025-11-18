@@ -153,7 +153,7 @@ let rec eval e env =
 
   | Free e1 ->
       (match eval e1 env with
-       | RefV _ ->  UnitV   (* optional: you could mark as "freed" if you want *)
+       | RefV _ ->  UnitV
        | _ -> failwith "Runtime error: free expects a reference")
 
   | PrintInt e1 ->
