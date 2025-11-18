@@ -31,14 +31,14 @@ let () =
            (match expr_type with
             | Typing.NoneT msg ->
                 Printf.eprintf "Typing error: %s\n%!" msg
-            (* | _ ->
+            | _ ->
                 let v = Eval.eval e eval_env in
                 Printf.printf " = %s : %s\n%!"
                   (Eval.unparse_result v)
-                  (Typing.unparse_type expr_type)) *)
-            | _ ->
+                  (Typing.unparse_type expr_type))
+            (* | _ ->
                 let _ = Eval.eval e eval_env in
-                ())
+                ()) *)
          with Failure msg ->
            Printf.eprintf "Error: %s\n%!" msg);
         loop ()

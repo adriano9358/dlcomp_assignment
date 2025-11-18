@@ -9,9 +9,9 @@
  (modules parser))
 
 (executables
- (public_names calc calcc)
- (names calc calcc)
- (modules calc calcc)
+ (public_names calc calcc simple_test)
+ (names calc calcc simple_test)
+ (modules calc calcc simple_test)
  (flags
   (:standard -w -32 -w -33))
  (libraries calc_lib))
