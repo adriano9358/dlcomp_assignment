@@ -2,14 +2,8 @@
 (* This file contains the type system for the calcb language, with typed annotations *)
 
 open Env
+open Calc_types
 
-type calc_type = 
-  | IntT 
-  | BoolT
-  | RefT of calc_type
-  | UnitT
-  | NoneT of string
-  | FunT of calc_type * calc_type
 
 type ann = calc_type
 
@@ -64,15 +58,6 @@ let type_of = function
   | Seq (t,_,_) | Assign (t,_,_) | If (t,_,_,_) | While (t,_,_)
   | New (t,_) | Deref (t,_) | Free (t,_)
   | PrintInt (t,_) | PrintBool (t,_) | PrintEndline(t)  | Fun(t, _, _ ,_ ) | App(t, _, _) -> t
-
-let rec convert_type = function
-  | Ast.IntT -> IntT
-  | Ast.BoolT -> BoolT
-  | Ast.UnitT -> UnitT
-  | Ast.NoneT -> NoneT "Invalid type"
-  | Ast.RefT t -> RefT (convert_type t)
-  | Ast.FunT (t1, t2) -> FunT (convert_type t1, convert_type t2)
-
 
 let rec unparse_type = function
   | IntT -> "int"
@@ -255,12 +240,12 @@ let rec typecheck e env =
 
   | Ast.Fun (name, typ, body) ->
       let env' = begin_scope env in
-      let env'' = bind env' name (convert_type typ) in
+      let env'' = bind env' name ( typ) in
       let t1 = typecheck body env'' in
       let _ = end_scope env'' in
       (match type_of t1 with
-     | NoneT _ -> mk_fun (NoneT "Function parameter type mismatch") name (convert_type typ) t1
-     | _ -> mk_fun (FunT (convert_type typ, type_of t1)) name (convert_type typ) t1)
+     | NoneT _ -> mk_fun (NoneT "Function parameter type mismatch") name ( typ) t1
+     | _ -> mk_fun (FunT ( typ, type_of t1)) name ( typ) t1)
   
   | Ast.App (e1, e2) ->
       let e1' = typecheck e1 env in

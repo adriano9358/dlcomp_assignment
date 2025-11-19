@@ -1,12 +1,6 @@
 (* This file contains the description of the calc language and some utils related to the AST *)
 
-type calc_typee =
-    | IntT
-    | BoolT
-    | FunT of calc_typee * calc_typee
-    | RefT of calc_typee
-    | UnitT
-    | NoneT   
+open Calc_types
 
 
 (* The abstract syntax tree (AST) type for the calc language *)
@@ -47,7 +41,7 @@ type ast =
   | PrintBool of ast
   | PrintEndline
 
-  | Fun of string * calc_typee * ast            
+  | Fun of string * calc_type * ast            
   | App of ast * ast
 
 
@@ -101,11 +95,11 @@ let rec unparse_ast p e =
         | UnitT -> "unit"
         | RefT (_) -> "ref_type"
         | FunT (_,_) -> "fun_type"  
-        | NoneT -> "none"
+        | NoneT _ -> "none"
     in
     paren p 0 ("fun (" ^ arg ^ " : " ^ type_str ^ ") -> " ^ unparse_ast 0 body)
   
-    | App (e1,e2) -> paren p 20 (unparse_ast 20 e1 ^ " (" ^ unparse_ast 0 e2 ^ ")")
-    (* | _ -> assert false   *)
+  | App (e1,e2) -> paren p 20 (unparse_ast 20 e1 ^ " (" ^ unparse_ast 0 e2 ^ ")")
+    
 
 

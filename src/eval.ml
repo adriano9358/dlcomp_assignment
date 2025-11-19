@@ -10,6 +10,7 @@ type result =
   | RefV of result ref
   | UnitV
   | ClosureV of string * ast * result env
+  | Freed
 
 let unparse_result = function
   | IntV n -> string_of_int n
@@ -17,6 +18,7 @@ let unparse_result = function
   | RefV _ -> "<ref>"
   | UnitV -> "unit"
   | ClosureV _ -> "<fun>"
+  | Freed -> "<freed>"
 
 let int_int_binop f r1 r2 = 
   match r1, r2 with
@@ -81,10 +83,6 @@ let rec eval e env =
   | Div (e1,e2) -> int_int_binop ( / ) (eval e1 env) (eval e2 env)
   | Neg e1 ->  int_int_binop (-) (IntV 0) (eval e1 env)
   | And (e1,e2) -> bool_bool_binop (&&) (eval e1 env) (eval e2 env)
-  (* | And (e1,e2) -> begin match eval e1 with 
-                     | BoolV true -> eval e2
-                     | _ -> BoolV false
-                   end *)
   | Or (e1,e2) -> bool_bool_binop (||) (eval e1 env) (eval e2 env)
   | Eq (e1,e2) -> a_a_bool_eq (eval e1 env) (eval e2 env)
   | Neq (e1,e2) -> a_a_bool_neq (eval e1 env) (eval e2 env)
@@ -139,32 +137,41 @@ let rec eval e env =
       RefV (Mem.new_ref v)
 
   | Deref e1 ->
-      (match eval e1 env with
-       | RefV r -> Mem.deref r
-       | _ -> failwith "Runtime error: deref expects a reference")
+    (match eval e1 env with
+     | RefV r ->
+         (match Mem.deref r with
+          | Freed -> failwith "Runtime error: dereferencing freed reference"
+          | v -> v)
+     | _ -> failwith "Runtime error: deref expects a reference")
 
   | Assign (e1, e2) ->
-      let v1 = eval e1 env in
-      let v2 = eval e2 env in
-      (match v1 with
-       | RefV r -> Mem.assign r v2; UnitV
-       | _ -> failwith "Runtime error: assign expects a reference")
+    let v1 = eval e1 env in
+    let v2 = eval e2 env in
+    (match v1 with
+     | RefV r ->
+         (match Mem.deref r with
+          | Freed -> failwith "Runtime error: assigning to freed reference"
+          | _ -> Mem.assign r v2; UnitV)
+     | _ -> failwith "Runtime error: assign expects a reference")
+
 
   | Free e1 ->
       (match eval e1 env with
-       | RefV _ ->  UnitV
-       | _ -> failwith "Runtime error: free expects a reference")
+       | RefV r ->
+         Mem.assign r Freed; 
+         UnitV
+     | _ -> failwith "Runtime error: free expects a reference")
 
   | PrintInt e1 ->
       let v = eval e1 env in
       let n = as_int v in
-      let () = print_endline (string_of_int n) in
+      let () = print_string (string_of_int n) in
       UnitV
 
   | PrintBool e1 ->
       let v = eval e1 env in
       let b = as_bool v in
-      let () = print_endline (string_of_bool b) in
+      let () = print_string (string_of_bool b) in
       UnitV
 
   | PrintEndline ->

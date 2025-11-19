@@ -1,6 +1,6 @@
 (library
  (name calc_lib)
- (modules eval llvm ast lexer parser typing env mem))
+ (modules eval llvm ast lexer parser typing env mem calc_types))
 
 (ocamllex
  (modules lexer))
@@ -9,9 +9,9 @@
  (modules parser))
 
 (executables
- (public_names calc calcc simple_test)
- (names calc calcc simple_test)
- (modules calc calcc simple_test)
+ (public_names calc calcc interpreter_tests)
+ (names calc calcc interpreter_tests)
+ (modules calc calcc interpreter_tests)
  (flags
   (:standard -w -32 -w -33))
  (libraries calc_lib))

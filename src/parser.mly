@@ -8,7 +8,7 @@ open Ast
 
 %start main
 %type <Ast.ast> main
-%type <Ast.calc_typee> type_expr
+%type <Calc_types.calc_type> type_expr
 
 
 %%
@@ -21,11 +21,12 @@ type_expr:
     | REF_TYPE LPAREN type_expr  RPAREN      { RefT ($3) } 
     | UNIT_TYPE                 { UnitT }
     | type_expr ARROW type_expr { FunT($1, $3) }
+    | LPAREN type_expr RPAREN    { $2 }
 
 
 expr:
   | expr SEMI expr          { Seq($1, $3) }
-  | IF expr THEN expr ELSE expr { If($2, $4, $6) }
+  | IF expr THEN expr ELSE expr END { If($2, $4, $6) }
   | WHILE expr DO expr END     { While($2, $4) }
   | assign_expr             { $1 }
 
@@ -90,21 +91,4 @@ atom:
   | NOT atom           { Not $2 }
   | ID                    { Id $1 }
 
-// factor: 
-//   | expr LPAREN expr RPAREN       { App($1, $3) }
-
-//   | NEW LPAREN expr RPAREN          { New($3) }
-//   | FREE LPAREN expr RPAREN         { Free($3) }
-//   | PRINTINT LPAREN expr RPAREN    { PrintInt($3) }
-//   | PRINTBOOL LPAREN expr RPAREN   { PrintBool($3) }
-//   | PRINTENDLINE LPAREN RPAREN      { PrintEndline }
-//   | BANG factor                     { Deref($2) }
-
-//   | TRUE                  { Bool true }
-//   | FALSE                 { Bool false }
-//   | INT                   { Num $1 }
-//   | LPAREN expr RPAREN    { $2 }
-//   | MINUS factor          { Neg $2 }
-//   | NOT factor           { Not $2 }
-//   | ID                    { Id $1 }
 ;

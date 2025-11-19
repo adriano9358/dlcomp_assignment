@@ -29,7 +29,7 @@ let () =
            let expr_type = Typing.type_of typed_ast in
            
            (match expr_type with
-            | Typing.NoneT msg ->
+            | Calc_types.NoneT msg ->
                 Printf.eprintf "Typing error: %s\n%!" msg
             | _ ->
                 let v = Eval.eval e eval_env in
