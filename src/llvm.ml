@@ -7,8 +7,18 @@ type result =
   | Const of int
   | Register of register
   | Ptr of register
+  | FunPtr of string
 
 type mem_kind = IntK | BoolK | RefK
+
+type func_def = {
+  fname : string;
+  param_name : string;
+  ret_type : Typing.calc_type;
+  param_type : Typing.calc_type;
+  blocks : (label * llvm list) list;
+  entry_label : label;
+}
 
 type llvm =
   | Addi32 of register * result * result
@@ -28,17 +38,31 @@ type llvm =
   | PhiI32 of register * (result * label) list
   | ZextI1ToI32 of register * result
   | CallPrintfI32 of register * result
-  | LoadI32 of register * result
-  | StoreI32 of result * result
   | CallNew of mem_kind * register * result
   | CallLoad of mem_kind * register * result
   | CallStore of mem_kind * result * result
   | CallFree of result
+  | CallFunI32 of register * string * Typing.calc_type * result
+  | CallFunI1 of register * string * Typing.calc_type * result
+  | CallFunVoid of string * Typing.calc_type * result
+  | RetI32 of result
+  | RetI1 of result
+  | RetVoid
 
 let count = ref 0
 let new_reg () = incr count; !count
-let new_label = new_reg
+let new_label = new_reg                                                 (*estou com o pequeno pressentimento que isto é inútil e pode-se meter tudo new_reg*)
 
+let functions : func_def list ref = ref []
+let new_fun_id =
+  let c = ref 0 in
+  fun () -> incr c; !c
+
+let llvm_type_of_param = function
+  | Typing.IntT -> "i32"
+  | Typing.BoolT -> "i1"
+  | Typing.RefT _ -> "ptr"
+  | Typing.NoneT m -> failwith ("invalid parameter type: " ^ m)
 
 
 let rec compile_llvm e env label block = 
@@ -321,6 +345,49 @@ let rec compile_llvm e env label block =
     let blk_body_end = (lb, bb @ [BrLabel l_cond]) in
     (Const 0, l_exit, [], blocks0 @ bsc @ [blk_cond] @ bsb @ [blk_body_end])
 
+  | Fun (_, param_name, param_ty, body) ->
+    let ret_ty =
+      match fun_ty with
+      | Typing.FunT (_, rt) -> rt
+      | _ -> failwith "internal: Fun node with non function type"
+    in
+
+    let fid = new_fun_id () in
+    let fname = "fun" ^ string_of_int fid in
+
+    let entry = new_label () in
+
+    (* ambiente da função: novo scope *)
+    let env_fun = Env.begin_scope Env.empty_env in
+    (* convencionamos que o parâmetro está em %0 *)
+    let env_fun = Env.bind env_fun param_name (Register 0) in
+
+    let r_body, l_end, b_end, bs_end =
+      compile_llvm body env_fun entry []
+    in
+
+    let ret_instrs =
+      match ret_ty with
+      | Typing.IntT  -> [RetI32 r_body]
+      | Typing.BoolT -> [RetI1 r_body]
+      | Typing.UnitT -> [RetVoid]
+      | _ -> failwith "Unsupported function return type"
+    in
+
+    let func_blocks = bs_end @ [ (l_end, b_end @ ret_instrs) ] in
+
+    functions := {
+      fname;
+      param_name;
+      ret_type = ret_ty;
+      param_type = param_ty;
+      blocks = func_blocks;
+      entry_label = entry;
+    } :: !functions;
+
+    (* valor da expressão Fun é um ponteiro para essa função *)
+    (FunPtr fname, label, block, [])
+
 
   | _ -> failwith "Unexpected llvm node in typing AST"
 
@@ -352,14 +419,16 @@ let unparse_register n = "%" ^ string_of_int n
 let unparse_label_use n = "%L" ^ string_of_int n
 let unparse_label_declaration l = "L" ^ string_of_int l ^ ":"
 
-let unparse_ptr = function
-  | Ptr r -> unparse_register r
-  | _ -> failwith "Expected pointer"
-
 let unparse_result = function
   | Const x -> string_of_int x
   | Register x -> unparse_register x
+  | Ptr r -> unparse_register r
+  | FunPtr name -> "@" ^ name
   | _ -> failwith "Unparse: unknown result type"
+
+let unparse_ptr = function
+  | Ptr r -> unparse_register r
+  | _ -> failwith "Unparse: expected pointer result"
 
 let unparse_type = function
   | IntT -> "i32"
@@ -424,16 +493,12 @@ let unparse_llvm_i = function
   | CmpGe (t, _, _, _) ->
       failwith ("Internal error: Cannot compare type " ^ (unparse_type t))
 
-  | LoadI32 (r, p) ->
-      "  " ^ unparse_register r ^ " = load i32, i32* " ^ unparse_ptr p
-  | StoreI32 (p, v) ->
-      "  store i32 " ^ unparse_result v ^ ", i32* " ^ unparse_ptr p
   | CallNew (k, r, v) ->
       let f_name, arg =
         match k with
         | IntK  -> ("@new_ref_int",  "i32 " ^ unparse_result v)
         | BoolK -> ("@new_ref_bool", "i1 "  ^ unparse_result v)
-        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_ptr v)
+        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_result v)
       in
       "  " ^ unparse_register r ^ " = call ptr " ^ f_name ^ "(" ^ arg ^ ")"
   | CallLoad (k, r, p) ->
@@ -449,11 +514,35 @@ let unparse_llvm_i = function
         match k with
         | IntK  -> ("@assign_int",  "i32 " ^ unparse_result v)
         | BoolK -> ("@assign_bool", "i1 "  ^ unparse_result v)
-        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_ptr v)
+        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_result v)
       in
       "  call void " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ", " ^ v_arg ^ ")"
   | CallFree p ->
       "  call void @free_ref(ptr noundef " ^ unparse_ptr p ^ ")"
+
+  | CallFunI32 (r, fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  " ^ unparse_register r ^
+      " = call i32 @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | CallFunI1 (r, fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  " ^ unparse_register r ^
+      " = call i1 @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | CallFunVoid (fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  call void @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | RetI32 v ->
+      "  ret i32 " ^ unparse_result v
+  | RetI1 v ->
+      "  ret i1 " ^ unparse_result v
+  | RetVoid ->
+      "  ret void"
 
   
   (* | _ -> failwith "Not implemented yet" *)
