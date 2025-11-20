@@ -44,7 +44,7 @@ type llvm =
 
 let count = ref 0
 let new_reg () = incr count; !count
-let new_label = new_reg                                                 (*estou com o pequeno pressentimento que isto é inútil e pode-se meter tudo new_reg*)
+let new_label = new_reg
 
 type func_def = {
   fname : string;
