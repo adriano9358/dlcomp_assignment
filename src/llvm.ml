@@ -366,7 +366,14 @@ let rec compile_llvm e env label block =
 
     (* Create a new environment scope for the function and bind the parameter *)
     let env_fun = Env.begin_scope Env.empty_env in
-    let env_fun = Env.bind env_fun param_name (Register 0) in
+    let param_res =
+      match param_ty with
+      | RefT _ | FunT _ -> Ptr 0                                            (* este FunT no Ptr é que estou na dúvida *)
+      | IntT | BoolT | UnitT -> Register 0
+      | NoneT msg ->
+          failwith ("Internal: parametro com tipo NoneT: " ^ msg)
+    in
+    let env_fun = Env.bind env_fun param_name param_res in
 
     let r_body, l_end, b_end, bs_end =
       compile_llvm body env_fun entry []
@@ -468,13 +475,10 @@ let rec compile_llvm e env label block =
 (* === Unparse / print helpers === *)
 
 let prologue =
-  ["@.str = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1";
-   "define i32 @main() #0 {"]
+  ["@.str = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1"]
 
 let epilogue =
-  ["  ret i32 0";
-   "}";
-   "declare i32 @printf(i8* noundef, ...) #1";
+  ["declare i32 @printf(i8* noundef, ...) #1";
    "declare ptr  @new_ref_int(i32 noundef)";
    "declare ptr  @new_ref_bool(i1 noundef)";
    "declare ptr  @new_ref_ref(ptr noundef)";
@@ -632,6 +636,28 @@ let print_block (label, instructions) =
 
 let print_blocks bs = List.iter print_block bs
 
+
+let llvm_type_of_ret = function
+  | IntT  -> "i32"
+  | BoolT -> "i1"
+  | UnitT -> "void"
+  | RefT _ -> "ptr"
+  | FunT _ -> "ptr"
+  | NoneT m ->
+      failwith ("invalid function return type: " ^ m)
+
+let print_function f =
+  let ret_llty = llvm_type_of_ret f.ret_type in
+  let param_llty = llvm_type_of_param f.param_type in
+  (* cabecalho *)
+  print_endline ("define " ^ ret_llty ^ " @" ^ f.fname ^
+                 "(" ^ param_llty ^ " %0) {");
+  (* corpo *)
+  print_blocks f.blocks;
+  (* fechar *)
+  print_endline "}"
+
+
 let emit_printf ret t =
   match t with
   | IntT ->
@@ -653,10 +679,21 @@ let emit_printf ret t =
   | _ -> failwith "Unsupported top-level result type for printf"
 
 let print_llvm (ret, label, instructions, blocks) t =
+  (* globais, por exemplo @.str *)
   List.iter print_endline prologue;
+
+  (* funcoes definidas pelo utilizador *)
+  List.iter print_function (List.rev !functions);
+
+  (* main *)
+  print_endline "define i32 @main() #0 {";
   print_blocks (blocks @ [(label, instructions)]);
   let trailer = emit_printf ret t in
   if trailer <> "" then print_endline trailer;
+  print_endline "  ret i32 0";
+  print_endline "}";
+
+  (* declara externs *)
   List.iter print_endline epilogue
 
 let compile e = compile_llvm e [] 0 []
