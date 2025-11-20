@@ -20,6 +20,7 @@ type_expr:
     | BOOL_TYPE                 { BoolT }
     | REF_TYPE LPAREN type_expr  RPAREN      { RefT ($3) } 
     | UNIT_TYPE                 { UnitT }
+    | LPAREN type_expr RPAREN   { $2 }
     | type_expr ARROW type_expr { FunT($1, $3) }
     | LPAREN type_expr RPAREN    { $2 }
 

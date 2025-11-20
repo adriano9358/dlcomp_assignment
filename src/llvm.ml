@@ -7,6 +7,7 @@ type result =
   | Const of int
   | Register of register
   | Ptr of register
+  | FunPtr of string
 
 type mem_kind = IntK | BoolK | RefK
 
@@ -28,17 +29,44 @@ type llvm =
   | PhiI32 of register * (result * label) list
   | ZextI1ToI32 of register * result
   | CallPrintfI32 of register * result
-  | LoadI32 of register * result
-  | StoreI32 of result * result
   | CallNew of mem_kind * register * result
   | CallLoad of mem_kind * register * result
   | CallStore of mem_kind * result * result
   | CallFree of result
+  | CallFunI32 of register * string * Typing.calc_type * result
+  | CallFunI1 of register * string * Typing.calc_type * result
+  | CallFunPtr of register * string * Typing.calc_type * result
+  | CallFunVoid of string * Typing.calc_type * result
+  | RetI32 of result
+  | RetI1 of result
+  | RetPtr of result
+  | RetVoid
 
 let count = ref 0
 let new_reg () = incr count; !count
-let new_label = new_reg
+let new_label = new_reg                                                 (*estou com o pequeno pressentimento que isto é inútil e pode-se meter tudo new_reg*)
 
+type func_def = {
+  fname : string;
+  param_name : string;
+  ret_type : Typing.calc_type;
+  param_type : Typing.calc_type;
+  blocks : (label * llvm list) list;
+  entry_label : label;
+}
+let functions : func_def list ref = ref []
+let new_fun_id =
+  let c = ref 0 in
+  fun () -> incr c; !c
+
+let llvm_type_of_param = function
+  | Typing.IntT -> "i32"
+  | Typing.BoolT -> "i1"
+  | Typing.RefT _ -> "ptr"
+  | Typing.FunT _ -> "ptr"
+  | Typing.UnitT -> "unit"    (* unit represented as a dummy integer *)
+  | Typing.NoneT m ->
+      failwith ("invalid parameter type: " ^ m)
 
 
 let rec compile_llvm e env label block = 
@@ -178,7 +206,7 @@ let rec compile_llvm e env label block =
 
     begin match t_if with
     | UnitT ->
-        (* nenhum valor a juntar, devolve dummy *)
+        (* no value to merge, return dummy *)
         (Const 0, l_merge, [], blocks)
     | BoolT ->
         let r = new_reg () in
@@ -186,7 +214,7 @@ let rec compile_llvm e env label block =
     | IntT  ->
         let r = new_reg () in
         (Register r, l_merge, [PhiI32 (r, [ (r_then, l_tend); (r_else, l_eend) ])], blocks)
-    | _ -> failwith "If returning unsupported type"
+    | _ -> failwith "If error: returning unsupported type"
     end
 
   | PrintInt (_, e1) ->
@@ -270,7 +298,7 @@ let rec compile_llvm e env label block =
     | RefT IntT -> (Ptr r,  l1, b1 @ [CallNew (IntK,  r, v)], bs1)
     | RefT BoolT -> (Ptr r,  l1, b1 @ [CallNew (BoolK, r, v)], bs1)
     | RefT (RefT _) -> (Ptr r,  l1, b1 @ [CallNew (RefK,  r, v)], bs1)
-    | RefT _ | _ -> failwith "New: unsupported element type"
+    | RefT _ | _ -> failwith "New error: unsupported element type"
     end
 
   | Deref (t, e1) ->
@@ -280,21 +308,21 @@ let rec compile_llvm e env label block =
     | IntT -> (Register r, l1, b1 @ [CallLoad (IntK,  r, p)], bs1)
     | BoolT -> (Register r, l1, b1 @ [CallLoad (BoolK, r, p)], bs1)
     | RefT _ -> (Ptr r, l1, b1 @ [CallLoad (RefK,  r, p)], bs1)
-    | _ -> failwith "Deref: unsupported element type"
+    | _ -> failwith "Deref error: unsupported element type"
     end
 
   | Assign (_, e1, e2) ->
-    (* p é ptr da célula; v é o valor a escrever *)
+    (* p is the pointer to the cell; v is the value to write *)
     let p, l1, b1, bs1 = compile_llvm e1 env label block in
     let v, l2, b2, bs2 = compile_llvm e2 env l1 b1 in
-    (* descobrir o conteúdo da ref do lado esquerdo *)
+    (* discover the contents of the ref on the left-hand side *)
     let lhs_t = Typing.type_of e1 in
     let instr =
       match lhs_t with
       | RefT IntT -> CallStore (IntK, p, v)
       | RefT BoolT -> CallStore (BoolK, p, v)
       | RefT (RefT _) -> CallStore (RefK, p, v)
-      | _ -> failwith "Assign: lhs must be ref(_)"
+      | _ -> failwith "Assign error: lhs must be ref(_)"
     in
     (Const 0, l2, b2 @ [instr], bs1 @ bs2)
 
@@ -321,6 +349,123 @@ let rec compile_llvm e env label block =
     let blk_body_end = (lb, bb @ [BrLabel l_cond]) in
     (Const 0, l_exit, [], blocks0 @ bsc @ [blk_cond] @ bsb @ [blk_body_end])
 
+  | Fun (fun_ty, param_name, param_ty, body) ->
+    (* fun_ty vem do typechecker, deve ser FunT(param_ty, ret_ty) *)
+    let ret_ty =
+      match fun_ty with
+      | FunT (_, rt) -> rt
+      | NoneT msg ->
+          failwith ("internal: Fun has NoneT type: " ^ msg)
+      | _ ->
+          failwith "internal: Fun node with non-FunT type"
+    in
+
+    let fid = new_fun_id () in
+    let fname = "fun" ^ string_of_int fid in
+    let entry = new_label () in
+
+    (* Create a new environment scope for the function and bind the parameter *)
+    let env_fun = Env.begin_scope Env.empty_env in
+    let param_res =
+      match param_ty with
+      | RefT _ | FunT _ -> Ptr 0                                            (* este FunT no Ptr é que estou na dúvida *)
+      | IntT | BoolT | UnitT -> Register 0
+      | NoneT msg ->
+          failwith ("Internal: parametro com tipo NoneT: " ^ msg)
+    in
+    let env_fun = Env.bind env_fun param_name param_res in
+
+    let r_body, l_end, b_end, bs_end =
+      compile_llvm body env_fun entry []
+    in
+
+    (* choose the correct RetI* based on the inferred ret_ty *)
+    let ret_instrs =
+      match ret_ty with
+      | IntT  -> [RetI32 r_body]
+      | BoolT -> [RetI1 r_body]
+      | RefT _ -> [RetPtr r_body]
+      | FunT _ -> [RetPtr r_body]
+      | UnitT -> [RetVoid]
+      | NoneT msg ->
+          failwith ("internal: function body has type error: " ^ msg)
+    in
+
+    let func_blocks = bs_end @ [ (l_end, b_end @ ret_instrs) ] in
+
+    functions := {
+      fname;
+      param_name;
+      ret_type = ret_ty;    (* inferred return type, for bookkeeping only *)
+      param_type = param_ty;
+      blocks = func_blocks;
+      entry_label = entry;
+    } :: !functions;
+
+    (* value of the Fun expression is a pointer to that function *)
+    (FunPtr fname, label, block, [])
+
+  | App (ret_ty, e_fun, e_arg) ->
+    (* function type: FunT(param_ty, ret_ty_check) *)
+    let fun_ty = Typing.type_of e_fun in
+    let param_ty, ret_ty_check =
+      match fun_ty with
+      | FunT (pt, rt) -> (pt, rt)
+      | NoneT msg ->
+          failwith ("internal: App on ill-typed expression: " ^ msg)
+      | _ ->
+          failwith "internal: App on value that is not a function"
+    in
+
+    (* ensure consistency between App's ann and fun_ty *)
+    let _ =
+      match ret_ty, ret_ty_check with
+      | NoneT _, _ -> ()
+      | _, NoneT _ -> ()
+      | _ when ret_ty <> ret_ty_check ->
+          failwith "internal: return type in App does not match FunT"
+      | _ -> ()
+    in
+
+    (* compile the function and the argument *)
+    let r_fun, l1, b1, bs1 = compile_llvm e_fun env label block in
+    let r_arg, l2, b2, bs2 = compile_llvm e_arg env l1 b1 in
+
+    (* r_fun must be FunPtr function_name *)
+    let fname =
+      match r_fun with
+      | FunPtr n -> n
+      | _ -> failwith "internal: attempt to apply a value that is not a FunPtr"
+    in
+
+    (* generate the call according to the inferred return type ret_ty *)
+    let res, call_instr =
+      match ret_ty with
+      | IntT ->
+          let r = new_reg () in
+          (Register r, CallFunI32 (r, fname, param_ty, r_arg))
+
+      | BoolT ->
+          let r = new_reg () in
+          (Register r, CallFunI1 (r, fname, param_ty, r_arg))
+
+      | UnitT ->
+          (Const 0, CallFunVoid (fname, param_ty, r_arg))
+
+      | RefT _ ->
+          let r = new_reg () in
+          (Ptr r, CallFunPtr (r, fname, param_ty, r_arg))
+
+      | FunT _ ->
+          let r = new_reg () in
+          (Ptr r, CallFunPtr (r, fname, param_ty, r_arg))
+
+      | NoneT msg ->
+          failwith ("internal: App with type error: " ^ msg)
+    in
+
+    (res, l2, b2 @ [call_instr], bs1 @ bs2)
+
 
   | _ -> failwith "Unexpected llvm node in typing AST"
 
@@ -330,13 +475,10 @@ let rec compile_llvm e env label block =
 (* === Unparse / print helpers === *)
 
 let prologue =
-  ["@.str = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1";
-   "define i32 @main() #0 {"]
+  ["@.str = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1"]
 
 let epilogue =
-  ["  ret i32 0";
-   "}";
-   "declare i32 @printf(i8* noundef, ...) #1";
+  ["declare i32 @printf(i8* noundef, ...) #1";
    "declare ptr  @new_ref_int(i32 noundef)";
    "declare ptr  @new_ref_bool(i1 noundef)";
    "declare ptr  @new_ref_ref(ptr noundef)";
@@ -352,14 +494,16 @@ let unparse_register n = "%" ^ string_of_int n
 let unparse_label_use n = "%L" ^ string_of_int n
 let unparse_label_declaration l = "L" ^ string_of_int l ^ ":"
 
-let unparse_ptr = function
-  | Ptr r -> unparse_register r
-  | _ -> failwith "Expected pointer"
-
 let unparse_result = function
   | Const x -> string_of_int x
   | Register x -> unparse_register x
-  | _ -> failwith "Unparse: unknown result type"
+  | Ptr r -> unparse_register r
+  | FunPtr name -> "@" ^ name
+
+(* for calls that require an actual pointer and cannot accept other result types *)
+let unparse_ptr = function
+  | Ptr r -> unparse_register r
+  | _ -> failwith "Unparse: expected pointer result"
 
 let unparse_type = function
   | IntT -> "i32"
@@ -424,16 +568,12 @@ let unparse_llvm_i = function
   | CmpGe (t, _, _, _) ->
       failwith ("Internal error: Cannot compare type " ^ (unparse_type t))
 
-  | LoadI32 (r, p) ->
-      "  " ^ unparse_register r ^ " = load i32, i32* " ^ unparse_ptr p
-  | StoreI32 (p, v) ->
-      "  store i32 " ^ unparse_result v ^ ", i32* " ^ unparse_ptr p
   | CallNew (k, r, v) ->
       let f_name, arg =
         match k with
         | IntK  -> ("@new_ref_int",  "i32 " ^ unparse_result v)
         | BoolK -> ("@new_ref_bool", "i1 "  ^ unparse_result v)
-        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_ptr v)
+        | RefK  -> ("@new_ref_ref",  "ptr " ^ unparse_result v)
       in
       "  " ^ unparse_register r ^ " = call ptr " ^ f_name ^ "(" ^ arg ^ ")"
   | CallLoad (k, r, p) ->
@@ -449,11 +589,43 @@ let unparse_llvm_i = function
         match k with
         | IntK  -> ("@assign_int",  "i32 " ^ unparse_result v)
         | BoolK -> ("@assign_bool", "i1 "  ^ unparse_result v)
-        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_ptr v)
+        | RefK  -> ("@assign_ref",  "ptr " ^ unparse_result v)
       in
       "  call void " ^ f_name ^ "(ptr noundef " ^ unparse_ptr p ^ ", " ^ v_arg ^ ")"
   | CallFree p ->
       "  call void @free_ref(ptr noundef " ^ unparse_ptr p ^ ")"
+
+  | CallFunI32 (r, fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  " ^ unparse_register r ^
+      " = call i32 @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | CallFunI1 (r, fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  " ^ unparse_register r ^
+      " = call i1 @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | CallFunPtr (r, fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  " ^ unparse_register r ^
+      " = call ptr @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | CallFunVoid (fname, param_ty, arg) ->
+      let ll_ty = llvm_type_of_param param_ty in
+      "  call void @" ^ fname ^
+      "(" ^ ll_ty ^ " " ^ unparse_result arg ^ ")"
+
+  | RetI32 v ->
+      "  ret i32 " ^ unparse_result v
+  | RetI1 v ->
+      "  ret i1 " ^ unparse_result v
+  | RetPtr v ->
+      "  ret ptr " ^ unparse_result v
+  | RetVoid ->
+      "  ret void"
 
   
   (* | _ -> failwith "Not implemented yet" *)
@@ -463,6 +635,28 @@ let print_block (label, instructions) =
   List.iter (fun x -> x |> unparse_llvm_i |> print_endline) instructions
 
 let print_blocks bs = List.iter print_block bs
+
+
+let llvm_type_of_ret = function
+  | IntT  -> "i32"
+  | BoolT -> "i1"
+  | UnitT -> "void"
+  | RefT _ -> "ptr"
+  | FunT _ -> "ptr"
+  | NoneT m ->
+      failwith ("invalid function return type: " ^ m)
+
+let print_function f =
+  let ret_llty = llvm_type_of_ret f.ret_type in
+  let param_llty = llvm_type_of_param f.param_type in
+  (* cabecalho *)
+  print_endline ("define " ^ ret_llty ^ " @" ^ f.fname ^
+                 "(" ^ param_llty ^ " %0) {");
+  (* corpo *)
+  print_blocks f.blocks;
+  (* fechar *)
+  print_endline "}"
+
 
 let emit_printf ret t =
   match t with
@@ -481,14 +675,25 @@ let emit_printf ret t =
         unparse_register z ^ ")"
       in
       zline ^ "\n" ^ call
-  | UnitT -> ""  (* nada a imprimir *)
+  | UnitT -> ""  (* nothing to print *)
   | _ -> failwith "Unsupported top-level result type for printf"
 
 let print_llvm (ret, label, instructions, blocks) t =
+  (* globais, por exemplo @.str *)
   List.iter print_endline prologue;
+
+  (* funcoes definidas pelo utilizador *)
+  List.iter print_function (List.rev !functions);
+
+  (* main *)
+  print_endline "define i32 @main() #0 {";
   print_blocks (blocks @ [(label, instructions)]);
   let trailer = emit_printf ret t in
   if trailer <> "" then print_endline trailer;
+  print_endline "  ret i32 0";
+  print_endline "}";
+
+  (* declara externs *)
   List.iter print_endline epilogue
 
 let compile e = compile_llvm e [] 0 []
