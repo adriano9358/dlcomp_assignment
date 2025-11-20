@@ -14,7 +14,7 @@ let parse_string s =
   Lexing.from_string s |> parse_lexbuf
 
 
-let loop () =
+let loop optimize_enabled =
   (* First the prompt *)
   print_string "> "; flush stdout;
   match read_line () with
@@ -29,9 +29,15 @@ let loop () =
           let t = Typing.type_of e' in
           begin match t with 
            | NoneT m -> failwith ("Typing error: " ^ m)
-           | _ -> (* Call the compiler and receive the instructions *)
-                  let result = Llvm.compile e' in
-                  (* Print the resulting LLVM program *)
+           | _ ->
+                  (* aplicar constant folding se o flag estiver ativo *)
+                  let e_opt =
+                    if optimize_enabled
+                    then Optimize.optimize e'
+                    else e'
+                  in
+                  (* compilar o programa (original ou otimizado) *)
+                  let result = Llvm.compile e_opt in
                   Llvm.print_llvm result t
            end
         with Failure msg ->
@@ -41,8 +47,12 @@ let loop () =
 
 (* You cannot have top level computations, so we use, let () = ... *)
 let () =
-  (* First the message *)
+  (* ver se o utilizador passou -O ou --opt na linha de comandos *)
+  let optimize_enabled =
+    Array.exists
+      (fun s -> s = "-O" || s = "--opt")
+      Sys.argv
+  in
   print_endline "Insert an expression. Ctrl+D to exit.";
-  (* Then the loop *)
-  loop ()
+  loop optimize_enabled
  
