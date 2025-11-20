@@ -46,6 +46,6 @@ rule read = parse
   | '/'                      { DIV }
   | '('                      { LPAREN }
   | ')'                      { RPAREN }
-  | ['a'-'z']+ as id          { ID id }
+  | ['a'-'z' 'A'-'Z']+ as id { ID id }
   | eof                      { EOF }
   | _ as c                   { raise (Lexing_error (Printf.sprintf "Unexpected char: %c" c)) }
