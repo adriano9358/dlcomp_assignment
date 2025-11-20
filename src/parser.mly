@@ -22,7 +22,6 @@ type_expr:
     | UNIT_TYPE                 { UnitT }
     | LPAREN type_expr RPAREN   { $2 }
     | type_expr ARROW type_expr { FunT($1, $3) }
-    | LPAREN type_expr RPAREN    { $2 }
 
 
 expr:

@@ -1,4 +1,5 @@
 open Typing
+open Calc_types
 
 type register = int
 type label = int
@@ -17,12 +18,12 @@ type llvm =
   | Muli32 of register * result * result
   | Divi32 of register * result * result
   | Negi32 of register * result
-  | CmpEq of Typing.calc_type * register * result * result
-  | CmpNe of Typing.calc_type * register * result * result
-  | CmpLt of Typing.calc_type * register * result * result
-  | CmpLe of Typing.calc_type * register * result * result
-  | CmpGt of Typing.calc_type * register * result * result
-  | CmpGe of Typing.calc_type * register * result * result
+  | CmpEq of calc_type * register * result * result
+  | CmpNe of calc_type * register * result * result
+  | CmpLt of calc_type * register * result * result
+  | CmpLe of calc_type * register * result * result
+  | CmpGt of calc_type * register * result * result
+  | CmpGe of calc_type * register * result * result
   | BrI1 of result * label * label
   | BrLabel of label
   | PhiI1 of register * (result * label) list
@@ -33,10 +34,10 @@ type llvm =
   | CallLoad of mem_kind * register * result
   | CallStore of mem_kind * result * result
   | CallFree of result
-  | CallFunI32 of register * string * Typing.calc_type * result
-  | CallFunI1 of register * string * Typing.calc_type * result
-  | CallFunPtr of register * string * Typing.calc_type * result
-  | CallFunVoid of string * Typing.calc_type * result
+  | CallFunI32 of register * string * calc_type * result
+  | CallFunI1 of register * string * calc_type * result
+  | CallFunPtr of register * string * calc_type * result
+  | CallFunVoid of string * calc_type * result
   | RetI32 of result
   | RetI1 of result
   | RetPtr of result
@@ -49,8 +50,8 @@ let new_label = new_reg
 type func_def = {
   fname : string;
   param_name : string;
-  ret_type : Typing.calc_type;
-  param_type : Typing.calc_type;
+  ret_type : calc_type;
+  param_type : calc_type;
   blocks : (label * llvm list) list;
   entry_label : label;
 }
@@ -60,12 +61,12 @@ let new_fun_id =
   fun () -> incr c; !c
 
 let llvm_type_of_param = function
-  | Typing.IntT -> "i32"
-  | Typing.BoolT -> "i1"
-  | Typing.RefT _ -> "ptr"
-  | Typing.FunT _ -> "ptr"
-  | Typing.UnitT -> "unit"    (* unit represented as a dummy integer *)
-  | Typing.NoneT m ->
+  | IntT -> "i32"
+  | BoolT -> "i1"
+  | RefT _ -> "ptr"
+  | FunT _ -> "ptr"
+  | UnitT -> "unit"    (* unit represented as a dummy integer *)
+  | NoneT m ->
       failwith ("invalid parameter type: " ^ m)
 
 
